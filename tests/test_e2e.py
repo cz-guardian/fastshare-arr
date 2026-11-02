@@ -199,6 +199,12 @@ class E2E(unittest.TestCase):
         self.assertEqual(rewrite_title("The.Simpsons.S35E01.1080p", "The Simpsons"), "The.Simpsons.S35E01.1080p")
         self.assertEqual(rewrite_title("Příběh Žlutého S01E01", "Pribeh Zluteho"), "Příběh Žlutého S01E01")  # diacritics ignored
         self.assertEqual(rewrite_title("Movie.2020.1080p", "Movie"), "Movie.2020.1080p")  # no episode marker: untouched
+        # extra words in the file's series name must not count as a match (Sonarr compares the whole name)
+        self.assertEqual(rewrite_title("Blue.Bluey.S01E05.Země.stínů.1080p", "Bluey"), "Bluey.S01E05.Země.stínů.1080p")
+        self.assertEqual(rewrite_title("Blue.Bluey.S01E05.Země.stínů.1080p", "Bluey 2018"), "Bluey.2018.S01E05.Země.stínů.1080p")
+        self.assertEqual(rewrite_title("Bluey.2018.S01E05.x", "Bluey 2018"), "Bluey.2018.S01E05.x")
+        self.assertEqual(rewrite_title("Bluey (2018) S01E05 x", "Bluey"), "Bluey (2018) S01E05 x")
+        self.assertEqual(rewrite_title("S01E05.x", "Bluey"), "Bluey.S01E05.x")
 
     def test_4d_guids_are_unique(self):
         rss = ET.fromstring(self.get("/newznab/api", t="search", apikey="k3y", q="x"))

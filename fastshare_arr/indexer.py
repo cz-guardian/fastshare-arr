@@ -60,14 +60,23 @@ def _tokens(s: str) -> set:
     return set(re.findall(r"[a-z0-9]+", s))
 
 
+def _series_key(s: str) -> list:
+    """Comparable form of a series name, close to how Sonarr cleans titles: accents folded, punctuation and
+    year dropped, leading article dropped. 'Blue.Bluey' and 'Bluey (2018)' therefore differ, as for Sonarr."""
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
+    toks = [t for t in re.findall(r"[a-z0-9]+", s) if not re.fullmatch(r"(19|20)\d\d", t)]
+    return toks[1:] if toks and toks[0] in ("the", "a", "an") else toks
+
+
 def rewrite_title(title: str, q: str) -> str:
-    """If the file's series name does not contain what Sonarr searched for (Czech title, alias, odd naming),
-    present the release under the searched name so Sonarr can match the series. Episode + tags are kept."""
+    """If the file's series name is not what Sonarr searched for (Czech title, extra words like 'Blue.Bluey',
+    odd naming), present the release under the searched name so Sonarr can match the series.
+    Episode marker and everything after it are kept."""
     pe = parse_episode(title)
     if not pe or not q:
         return title
-    if _tokens(q) <= _tokens(title[:pe[2]]):
-        return title  # already matches: leave untouched
+    if _series_key(q) == _series_key(title[:pe[2]]):
+        return title  # same series name: leave untouched
     base = re.sub(r"[^\w.()\-]+", ".", q.strip()).strip(".")
     return f"{base}.{re.sub(r'\s+', '.', title[pe[2]:].strip())}"
 
