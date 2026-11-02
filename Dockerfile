@@ -1,5 +1,4 @@
 FROM python:3.12-alpine
-# 7zip (7-Zip 23+) unpacks zip, 7z and rar/rar5 incl. multi-part and passworded sets; no separate unrar needed
 RUN apk add --no-cache 7zip
 WORKDIR /app
 COPY fastshare_arr ./fastshare_arr

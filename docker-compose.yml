@@ -11,7 +11,7 @@ services:
       # CHOWN_RECURSIVE: "true"  # one-off: also re-own existing files in the download folders
       FASTSHARE_USER: "your-login"
       FASTSHARE_PASS: "your-password"
-      # FASTSHARE_API_BASE: https://fastshare.cz   # Kodi add-on default; try https://fastshare.cloud if needed
+      # FASTSHARE_API_BASE: https://fastshare.cz   # Default but https://fastshare.cloud should work as well
       INCOMPLETE_DIR: /data/downloads/fastshare/incomplete
       COMPLETE_DIR: /data/downloads/fastshare/complete
       CATEGORIES: tv,movies,music

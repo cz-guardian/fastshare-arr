@@ -1,4 +1,4 @@
-"""Client for Fastshare's own JSON API (the one the official Kodi add-on uses).
+"""Client for Fastshare's Kodi JSON API
 
     GET {base}/api/api_kodi.php?process=login&login=U&password=P
         -> {"user": {"hash": "...", "data": {"value": <credit MB>}, "unlimited": "True"|...}}
