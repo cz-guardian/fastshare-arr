@@ -3,7 +3,7 @@ import signal
 import sys
 import threading
 
-from . import __version__, config
+from . import __version__, config, extract
 from .fastshare import FastshareClient, FastshareError
 from .manager import Manager
 from .sabapi import make_server
@@ -38,6 +38,8 @@ def main():
             sys.exit(1)
         return
 
+    if cfg.extract and not extract.rar_support():
+        logging.warning("No RAR-capable extractor found (install 7zip); .rar releases will fail to unpack")
     fs = FastshareClient(cfg)
     manager = Manager(cfg, fs)
     manager.start()

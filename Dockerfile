@@ -1,5 +1,6 @@
 FROM python:3.12-alpine
-RUN apk add --no-cache unrar 7zip
+# 7zip (7-Zip 23+) unpacks zip, 7z and rar/rar5 incl. multi-part and passworded sets; no separate unrar needed
+RUN apk add --no-cache 7zip
 WORKDIR /app
 COPY fastshare_arr ./fastshare_arr
 ENV PYTHONUNBUFFERED=1 CONFIG_DIR=/config PORT=8085

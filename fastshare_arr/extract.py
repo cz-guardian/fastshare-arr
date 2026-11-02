@@ -60,18 +60,31 @@ def _extract_one(first: Path, password: str):
                 z.extractall(out, pwd=password.encode() if password else None)
             return
         except (zipfile.BadZipFile, RuntimeError, NotImplementedError) as e:
-            seven = shutil.which("7z") or shutil.which("7zz")
-            if not seven:
+            if not _seven_zip():
                 raise ExtractError(f"{first.name}: {e}") from e
     if low.endswith(".rar"):
         tool = shutil.which("unrar")
         if tool:
             _run([tool, "x", "-o+", "-idq", f"-p{password}" if password else "-p-", str(first), str(out) + "/"])
             return
-    seven = shutil.which("7z") or shutil.which("7zz") or shutil.which("7za")
+    seven = _seven_zip()
     if not seven:
-        raise ExtractError(f"No extractor available for {first.name} (install unrar / 7zip)")
-    _run([seven, "x", "-y", f"-p{password}" if password else "-p", f"-o{out}", str(first)])
+        raise ExtractError(f"No extractor available for {first.name} (install the 7zip package)")
+    cmd = [seven, "x", "-y", f"-o{out}"]
+    if password:
+        cmd.append(f"-p{password}")
+    _run(cmd + [str(first)])
+
+
+def _seven_zip():
+    return shutil.which("7z") or shutil.which("7zz") or shutil.which("7za")
+
+
+def rar_support() -> str:
+    """Name of a tool able to unpack RAR, or '' (7-Zip 23+ reads RAR/RAR5; p7zip's 7za does not)."""
+    if shutil.which("unrar"):
+        return "unrar"
+    return (shutil.which("7z") or shutil.which("7zz") or "")
 
 
 def extract_all(folder: Path, password: str = "", delete: bool = True) -> int:
