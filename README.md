@@ -47,12 +47,17 @@ that host serves the same API, set `FASTSHARE_API_BASE=https://fastshare.cloud` 
 
 ## Limits worth knowing
 - Results are filtered by file name: Radarr only receives movies, Sonarr only episodes (SxxExx, 1x02 or dated), Lidarr audio/archives. Prowlarr: sync only category 2000 to Radarr, 5000 to Sonarr, 3000 to Lidarr.
-- Series names: Fastshare files often carry Czech or odd titles that Sonarr cannot match ("Unknown series").
-  For TV searches the indexer keeps only the requested season/episode and, if the file's name does not contain the
-  series name Sonarr searched for, presents the release under the searched name (episode and tags are kept, the saved
-  file gets the same name). Disable with `TV_TITLE_MODE=filename`. To see exactly what Sonarr gets, open
-  `http://fastshare-arr:8085/newznab/api?t=tvsearch&q=Show+Name&season=1&ep=2&apikey=KEY` in a browser;
-  every search is also logged with raw/returned/rewritten counts.
+- Series names: Fastshare's search is fuzzy and many files carry Czech or odd titles, so Sonarr may say "Unknown
+  series". The indexer never guesses (that would label other shows' episodes as yours). Instead you declare aliases in
+  `/config/aliases.json` (re-read automatically, no restart):
+
+      {"Bluey": ["Blue Bluey"], "The Simpsons": ["Simpsonovi"]}
+
+  Keys are the show names as Sonarr searches them, values are the names used in Fastshare file names. A matching
+  release is then listed as `Bluey.S01E05...` (and saved under that name); everything else keeps its own title.
+  Every TV search logs the other series names it saw, e.g. `Series names that are not 'Bluey' ...: 'Blue Bluey' x2,
+  'Země gangů' x5`, so you can see what to add. Results are also limited to the requested season/episode.
+  `TV_TITLE_MODE=off` disables the rewriting; `TITLE_ALIASES` accepts the same JSON as an env var.
 - Each search result is one file = one release. Multi-part RAR sets are not grouped into one release.
 - The search API gives no IMDb/TVDB ids, so Prowlarr falls back to text queries (title + `S01E02`); matching depends
   on how files are named. Fastshare returns no upload date, so results show as "new".
@@ -62,7 +67,7 @@ that host serves the same API, set `FASTSHARE_API_BASE=https://fastshare.cloud` 
   written to logs.
 
 ## Settings (env)
-`FASTSHARE_USER`, `FASTSHARE_PASS`, `FASTSHARE_API_BASE`, `FASTSHARE_ADULT` (false), `TV_TITLE_MODE` (auto|filename), `API_KEY`, `PORT` (8085),
+`FASTSHARE_USER`, `FASTSHARE_PASS`, `FASTSHARE_API_BASE`, `FASTSHARE_ADULT` (false), `TV_TITLE_MODE` (aliases|off), `TITLE_ALIASES`, `API_KEY`, `PORT` (8085),
 `PUID`, `PGID`, `UMASK`, `CHOWN_RECURSIVE`, `COMPLETE_DIR`, `INCOMPLETE_DIR`, `CATEGORIES`, `MAX_ACTIVE_JOBS` (1), `SPEED_LIMIT_KBPS`, `EXTRACT`,
 `DELETE_ARCHIVES`, `RETRIES` (4), `DEBUG`.
 

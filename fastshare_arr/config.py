@@ -84,7 +84,7 @@ def load() -> Config:
         fs_pass=os.environ.get("FASTSHARE_PASS", ""),
         fs_api_base=_env("FASTSHARE_API_BASE", "https://fastshare.cz").rstrip("/"),
         fs_adult=_bool("FASTSHARE_ADULT", False),
-        tv_title_mode=_env("TV_TITLE_MODE", "auto").lower(),
+        tv_title_mode=_env("TV_TITLE_MODE", "aliases").lower(),
         retries=_int("RETRIES", 4),
         user_agent=_env(
             "USER_AGENT",

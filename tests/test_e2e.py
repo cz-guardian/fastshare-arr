@@ -185,26 +185,42 @@ class E2E(unittest.TestCase):
         self.assertEqual(list(movies), ["Huge.Movie.2020.2160p"])          # Radarr: no episodes
         self.assertEqual(movies["Huge.Movie.2020.2160p"], ["2000", "2040"])
         tv = titles(t="tvsearch", q="Show Name", season="1", ep="2")
-        # Sonarr: no movies, no other episodes; a file with a different series name is presented under the searched name
-        self.assertEqual(list(tv), ["Show.Name.S01E02.1080p.WEB-DL.x264-GRP", "Show.Name.S01E02.CZ.dabing.720p"])
+        # Sonarr: no movies, no other episodes. A different series name is NOT relabelled (no alias configured)
+        self.assertEqual(list(tv), ["Show.Name.S01E02.1080p.WEB-DL.x264-GRP", "Czech Titulek S01E02 CZ dabing 720p"])
+        # ...until the user declares it an alias of the searched show
+        alias_file = self.cfg.config_dir / "aliases.json"
+        alias_file.write_text(json.dumps({"Show Name": ["Czech Titulek"]}))
+        try:
+            tv = titles(t="tvsearch", q="Show Name", season="1", ep="2")
+            self.assertEqual(list(tv), ["Show.Name.S01E02.1080p.WEB-DL.x264-GRP", "Show.Name.S01E02.CZ.dabing.720p"])
+        finally:
+            alias_file.unlink()
         both = titles(t="search", q="x")
         self.assertEqual(len(both), 4)  # plain search: nothing rewritten or filtered by episode
         self.assertEqual(both["Show.Name.S01E02.1080p.WEB-DL.x264-GRP"], ["5000", "5040"])
 
     def test_4c_title_helpers(self):
-        from fastshare_arr.indexer import parse_episode, rewrite_title
+        from fastshare_arr.indexer import _series_key, parse_episode, rewrite_title
         self.assertEqual(parse_episode("A S01E02E03 x")[:2], (1, {2, 3}))
         self.assertEqual(parse_episode("A 2x05 x")[:2], (2, {5}))
-        self.assertEqual(rewrite_title("Simpsonovi.S35E01.CZ.1080p", "The Simpsons"), "The.Simpsons.S35E01.CZ.1080p")
-        self.assertEqual(rewrite_title("The.Simpsons.S35E01.1080p", "The Simpsons"), "The.Simpsons.S35E01.1080p")
-        self.assertEqual(rewrite_title("Příběh Žlutého S01E01", "Pribeh Zluteho"), "Příběh Žlutého S01E01")  # diacritics ignored
-        self.assertEqual(rewrite_title("Movie.2020.1080p", "Movie"), "Movie.2020.1080p")  # no episode marker: untouched
-        # extra words in the file's series name must not count as a match (Sonarr compares the whole name)
-        self.assertEqual(rewrite_title("Blue.Bluey.S01E05.Země.stínů.1080p", "Bluey"), "Bluey.S01E05.Země.stínů.1080p")
-        self.assertEqual(rewrite_title("Blue.Bluey.S01E05.Země.stínů.1080p", "Bluey 2018"), "Bluey.2018.S01E05.Země.stínů.1080p")
-        self.assertEqual(rewrite_title("Bluey.2018.S01E05.x", "Bluey 2018"), "Bluey.2018.S01E05.x")
-        self.assertEqual(rewrite_title("Bluey (2018) S01E05 x", "Bluey"), "Bluey (2018) S01E05 x")
-        self.assertEqual(rewrite_title("S01E05.x", "Bluey"), "Bluey.S01E05.x")
+        self.assertEqual(parse_episode("Země gangů_S01E06_Antverpské blues 1080p")[:2], (1, {6}))  # underscores
+        self.assertIsNone(parse_episode("Movie.1920x1080.x264"))
+        bluey = {_series_key("Blue Bluey")}
+        # the reported bug: another show must never be labelled as the searched one
+        for q in ("Bluey", "Bluey 2018"):
+            self.assertEqual(rewrite_title("Země gangů_S01E06_Antverpské blues 1080p CZ", q, bluey),
+                             "Země gangů_S01E06_Antverpské blues 1080p CZ")
+            self.assertEqual(rewrite_title("Země gangů_S01E06_Antverpské blues 1080p CZ", q), "Země gangů_S01E06_Antverpské blues 1080p CZ")
+            self.assertEqual(rewrite_title("Gang.Related.S01E01.720p", q, bluey), "Gang.Related.S01E01.720p")
+        # without an alias nothing changes, even for a near-match
+        self.assertEqual(rewrite_title("Blue.Bluey.S01E05.Země.stínů.1080p", "Bluey 2018"), "Blue.Bluey.S01E05.Země.stínů.1080p")
+        # with the alias it is presented as the searched series
+        self.assertEqual(rewrite_title("Blue.Bluey.S01E05.Země.stínů.1080p", "Bluey 2018", bluey), "Bluey.2018.S01E05.Země.stínů.1080p")
+        self.assertEqual(rewrite_title("Blue_Bluey_S01E05_Země stínů_1080p", "Bluey", bluey), "Bluey.S01E05.Země.stínů.1080p")
+        # same series name (accents, article, year ignored): untouched
+        self.assertEqual(rewrite_title("The.Simpsons.S35E01.1080p", "The Simpsons", bluey), "The.Simpsons.S35E01.1080p")
+        self.assertEqual(rewrite_title("Bluey (2018) S01E05 x", "Bluey", bluey), "Bluey (2018) S01E05 x")
+        self.assertEqual(rewrite_title("Movie.2020.1080p", "Movie", bluey), "Movie.2020.1080p")
 
     def test_4d_guids_are_unique(self):
         rss = ET.fromstring(self.get("/newznab/api", t="search", apikey="k3y", q="x"))

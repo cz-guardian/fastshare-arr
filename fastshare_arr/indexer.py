@@ -18,12 +18,12 @@ from email.utils import formatdate
 from xml.sax.saxutils import escape, quoteattr
 
 log = logging.getLogger("indexer")
-SE_RE = re.compile(r"\bS(\d{1,2})[ ._-]?E(\d{1,3})((?:[ ._-]?E\d{1,3})*)|\b(\d{1,2})x(\d{2,3})\b", re.I)
+SE_RE = re.compile(r"(?<![A-Za-z0-9])S(\d{1,2})[ ._-]?E(\d{1,3})((?:[ ._-]?E\d{1,3})*)(?![A-Za-z0-9])|(?<![A-Za-z0-9])(\d{1,2})x(\d{2,3})(?![A-Za-z0-9])", re.I)
 VIDEO_EXT = re.compile(r"\.(mkv|mp4|avi|m4v|mov|wmv|ts|flac|mp3|m4a|ogg|opus|wav)$", re.I)
 REAL_VIDEO = re.compile(r"\.(mkv|mp4|avi|m4v|mov|wmv|ts)$", re.I)
 AUDIO_EXT = re.compile(r"\.(flac|mp3|m4a|ogg|opus|wav)$", re.I)
 DATE_RE = re.compile(r"\b(19|20)\d\d[.\-_ ](0[1-9]|1[0-2])[.\-_ ](0[1-9]|[12]\d|3[01])\b")
-TV_RE = re.compile(r"\bS\d{1,2}(E\d{1,3})?\b|\b\d{1,2}x\d{2}\b", re.I)
+TV_RE = re.compile(r"(?<![A-Za-z0-9])S\d{1,2}(?:[ ._-]?E\d{1,3})*(?![A-Za-z0-9])|(?<![A-Za-z0-9])\d{1,2}x\d{2,3}(?![A-Za-z0-9])", re.I)
 HD_RE = re.compile(r"2160p|1080[pi]|720p|4k|uhd", re.I)
 
 CAPS = """<?xml version="1.0" encoding="UTF-8"?>
@@ -55,36 +55,69 @@ def parse_episode(name: str):
     return int(m.group(4)), {int(m.group(5))}, m.start()
 
 
-def _tokens(s: str) -> set:
-    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
-    return set(re.findall(r"[a-z0-9]+", s))
-
-
-def _series_key(s: str) -> list:
+def _series_key(s: str) -> tuple:
     """Comparable form of a series name, close to how Sonarr cleans titles: accents folded, punctuation and
-    year dropped, leading article dropped. 'Blue.Bluey' and 'Bluey (2018)' therefore differ, as for Sonarr."""
+    year dropped, leading article dropped."""
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
     toks = [t for t in re.findall(r"[a-z0-9]+", s) if not re.fullmatch(r"(19|20)\d\d", t)]
-    return toks[1:] if toks and toks[0] in ("the", "a", "an") else toks
+    return tuple(toks[1:] if toks and toks[0] in ("the", "a", "an") else toks)
 
 
-def rewrite_title(title: str, q: str) -> str:
-    """If the file's series name is not what Sonarr searched for (Czech title, extra words like 'Blue.Bluey',
-    odd naming), present the release under the searched name so Sonarr can match the series.
-    Episode marker and everything after it are kept."""
+def rewrite_title(title: str, q: str, alias_keys=frozenset()) -> str:
+    """Present a release under the searched series name ONLY if the file's series name is a configured alias of it.
+    Anything else is returned untouched: guessing would label other shows' episodes as the searched show."""
     pe = parse_episode(title)
     if not pe or not q:
         return title
-    if _series_key(q) == _series_key(title[:pe[2]]):
-        return title  # same series name: leave untouched
+    series = _series_key(title[:pe[2]])
+    if series == _series_key(q) or series not in alias_keys:
+        return title
     base = re.sub(r"[^\w.()\-]+", ".", q.strip()).strip(".")
-    return f"{base}.{re.sub(r'\s+', '.', title[pe[2]:].strip())}"
+    return f"{base}.{re.sub(r'[\s_]+', '.', title[pe[2]:].strip())}"
+
+
+class Aliases:
+    """{"Bluey": ["Blue Bluey"], "The Simpsons": ["Simpsonovi"]} from CONFIG_DIR/aliases.json (re-read on change)
+    plus the optional TITLE_ALIASES env var (same JSON). Keys are the names Sonarr searches for."""
+
+    def __init__(self, cfg):
+        self.path = cfg.config_dir / "aliases.json"
+        self._mtime, self._map = None, {}
+
+    def _load(self):
+        raw = []
+        try:
+            m = self.path.stat().st_mtime
+            if m != self._mtime:
+                self._mtime = m
+                raw.append(self.path.read_text(encoding="utf-8"))
+            else:
+                return
+        except OSError:
+            self._mtime = None
+        import os
+        if os.environ.get("TITLE_ALIASES"):
+            raw.append(os.environ["TITLE_ALIASES"])
+        merged = {}
+        for text in raw:
+            try:
+                for series, names in json.loads(text).items():
+                    names = [names] if isinstance(names, str) else names
+                    merged.setdefault(_series_key(series), set()).update(_series_key(n) for n in names)
+            except (ValueError, AttributeError) as e:
+                log.error("Invalid aliases JSON: %s", e)
+        self._map = merged
+
+    def for_query(self, q: str) -> frozenset:
+        self._load()
+        return frozenset(self._map.get(_series_key(q), ()))
 
 
 class Indexer:
     def __init__(self, cfg, fs):
         self.cfg, self.fs = cfg, fs
         self._cache, self._lock = {}, threading.Lock()
+        self.aliases = Aliases(cfg)
 
     # ------------------------------------------------------------ helpers --
     def _results(self, term: str) -> list:
@@ -180,7 +213,9 @@ class Indexer:
         raw = self._results(term)
         season = int(p["season"]) if str(p.get("season", "")).isdigit() and int(p["season"]) < 1900 else None
         ep = int(p["ep"]) if str(p.get("ep", "")).isdigit() else None
-        items, rewrites = [], 0
+        items, rewrites, unmatched = [], 0, {}
+        alias_keys = self.aliases.for_query(q) if q else frozenset()
+        qkey = _series_key(q)
         for r in raw:
             name = r.get("filename", "")
             if not r.get("download_url") or not self.wanted(t, name):
@@ -193,14 +228,21 @@ class Indexer:
                     continue  # wrong season
                 if pe and ep is not None and ep not in pe[1]:
                     continue  # wrong episode
-                if self.cfg.tv_title_mode == "auto":
-                    new = rewrite_title(title, q)
+                if pe and q:
+                    series = title[:pe[2]].strip(" ._-")
+                    if _series_key(series) != qkey and _series_key(series) not in alias_keys:
+                        unmatched[series] = unmatched.get(series, 0) + 1
+                if self.cfg.tv_title_mode == "aliases":
+                    new = rewrite_title(title, q, alias_keys)
                     if new != title:
                         rewrites += 1
                         title = new
             items.append((r, title, title + ext))
         log.info("%s q=%r season=%s ep=%s -> %d raw, %d returned, %d titles rewritten",
                  t, q, season, ep, len(raw), len(items), rewrites)
+        if unmatched:
+            log.info("Series names that are not %r (add to %s if one is the same show): %s", q, self.aliases.path.name,
+                     ", ".join(f"{n!r} x{c}" for n, c in sorted(unmatched.items(), key=lambda x: -x[1])[:8]))
         limit = min(int(p.get("limit") or 100), 200)
         offset = int(p.get("offset") or 0)
         page = items[offset:offset + limit]
