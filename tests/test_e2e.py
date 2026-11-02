@@ -21,6 +21,8 @@ def rows():
         {"filename": "Show.Name.S01E02.1080p.WEB-DL.x264-GRP.mkv", "data": {"value": str(len(MKV))},
          "download_url": f"{b}/dl/111/Show.Name.S01E02.1080p.WEB-DL.x264-GRP.mkv"},
         {"filename": "Huge.Movie.2020.2160p.mkv", "data": {"value": str(BIG)}, "download_url": f"{b}/dl/999/huge.mkv"},
+        {"filename": "Czech Titulek S01E02 CZ dabing 720p.avi", "data": {"value": "1000"}, "download_url": f"{b}/dl/333/cz.avi"},
+        {"filename": "Show.Name.S01E03.1080p.mkv", "data": {"value": "1000"}, "download_url": f"{b}/dl/444/e3.mkv"},
     ]
 
 
@@ -171,6 +173,37 @@ class E2E(unittest.TestCase):
         self.assertIn(b"error", self.get("/newznab/api", t="search", apikey="nope"))
         rss = ET.fromstring(self.get("/newznab/api", t="search", apikey="k3y"))
         self.assertEqual(len(rss.findall("channel/item")), 1)
+
+    def test_4b_apps_only_get_their_own_kind(self):
+        ns = "{http://www.newznab.com/DTD/2010/feeds/attributes/}attr"
+
+        def titles(**q):
+            rss = ET.fromstring(self.get("/newznab/api", apikey="k3y", **q))
+            return {i.find("title").text: [a.get("value") for a in i.findall(ns) if a.get("name") == "category"]
+                    for i in rss.findall("channel/item")}
+        movies = titles(t="movie", q="x")
+        self.assertEqual(list(movies), ["Huge.Movie.2020.2160p"])          # Radarr: no episodes
+        self.assertEqual(movies["Huge.Movie.2020.2160p"], ["2000", "2040"])
+        tv = titles(t="tvsearch", q="Show Name", season="1", ep="2")
+        # Sonarr: no movies, no other episodes; a file with a different series name is presented under the searched name
+        self.assertEqual(list(tv), ["Show.Name.S01E02.1080p.WEB-DL.x264-GRP", "Show.Name.S01E02.CZ.dabing.720p"])
+        both = titles(t="search", q="x")
+        self.assertEqual(len(both), 4)  # plain search: nothing rewritten or filtered by episode
+        self.assertEqual(both["Show.Name.S01E02.1080p.WEB-DL.x264-GRP"], ["5000", "5040"])
+
+    def test_4c_title_helpers(self):
+        from fastshare_arr.indexer import parse_episode, rewrite_title
+        self.assertEqual(parse_episode("A S01E02E03 x")[:2], (1, {2, 3}))
+        self.assertEqual(parse_episode("A 2x05 x")[:2], (2, {5}))
+        self.assertEqual(rewrite_title("Simpsonovi.S35E01.CZ.1080p", "The Simpsons"), "The.Simpsons.S35E01.CZ.1080p")
+        self.assertEqual(rewrite_title("The.Simpsons.S35E01.1080p", "The Simpsons"), "The.Simpsons.S35E01.1080p")
+        self.assertEqual(rewrite_title("Příběh Žlutého S01E01", "Pribeh Zluteho"), "Příběh Žlutého S01E01")  # diacritics ignored
+        self.assertEqual(rewrite_title("Movie.2020.1080p", "Movie"), "Movie.2020.1080p")  # no episode marker: untouched
+
+    def test_4d_guids_are_unique(self):
+        rss = ET.fromstring(self.get("/newznab/api", t="search", apikey="k3y", q="x"))
+        guids = [i.find("guid").text for i in rss.findall("channel/item")]
+        self.assertEqual(len(guids), len(set(guids)))
 
     def test_5_insufficient_credit_fails_cleanly(self):
         rss = ET.fromstring(self.get("/newznab/api", t="movie", apikey="k3y", q="Huge Movie"))

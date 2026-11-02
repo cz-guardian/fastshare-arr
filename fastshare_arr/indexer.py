@@ -7,14 +7,22 @@ search -> grab -> download -> import works end to end with the stock arr apps.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import logging
 import re
 import threading
 import time
+import unicodedata
 from email.utils import formatdate
 from xml.sax.saxutils import escape, quoteattr
 
+log = logging.getLogger("indexer")
+SE_RE = re.compile(r"\bS(\d{1,2})[ ._-]?E(\d{1,3})((?:[ ._-]?E\d{1,3})*)|\b(\d{1,2})x(\d{2,3})\b", re.I)
 VIDEO_EXT = re.compile(r"\.(mkv|mp4|avi|m4v|mov|wmv|ts|flac|mp3|m4a|ogg|opus|wav)$", re.I)
+REAL_VIDEO = re.compile(r"\.(mkv|mp4|avi|m4v|mov|wmv|ts)$", re.I)
+AUDIO_EXT = re.compile(r"\.(flac|mp3|m4a|ogg|opus|wav)$", re.I)
+DATE_RE = re.compile(r"\b(19|20)\d\d[.\-_ ](0[1-9]|1[0-2])[.\-_ ](0[1-9]|[12]\d|3[01])\b")
 TV_RE = re.compile(r"\bS\d{1,2}(E\d{1,3})?\b|\b\d{1,2}x\d{2}\b", re.I)
 HD_RE = re.compile(r"2160p|1080[pi]|720p|4k|uhd", re.I)
 
@@ -34,6 +42,34 @@ CAPS = """<?xml version="1.0" encoding="UTF-8"?>
     <category id="5000" name="TV"><subcat id="5030" name="TV/SD"/><subcat id="5040" name="TV/HD"/></category>
   </categories>
 </caps>"""
+
+
+def parse_episode(name: str):
+    """(season, {episodes}, start_index_of_marker) or None. Handles S01E02, S01E02E03 and 1x02."""
+    m = SE_RE.search(name)
+    if not m:
+        return None
+    if m.group(1):
+        eps = {int(m.group(2))} | {int(x) for x in re.findall(r"E(\d{1,3})", m.group(3) or "", re.I)}
+        return int(m.group(1)), eps, m.start()
+    return int(m.group(4)), {int(m.group(5))}, m.start()
+
+
+def _tokens(s: str) -> set:
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
+    return set(re.findall(r"[a-z0-9]+", s))
+
+
+def rewrite_title(title: str, q: str) -> str:
+    """If the file's series name does not contain what Sonarr searched for (Czech title, alias, odd naming),
+    present the release under the searched name so Sonarr can match the series. Episode + tags are kept."""
+    pe = parse_episode(title)
+    if not pe or not q:
+        return title
+    if _tokens(q) <= _tokens(title[:pe[2]]):
+        return title  # already matches: leave untouched
+    base = re.sub(r"[^\w.()\-]+", ".", q.strip()).strip(".")
+    return f"{base}.{re.sub(r'\s+', '.', title[pe[2]:].strip())}"
 
 
 class Indexer:
@@ -71,17 +107,39 @@ class Indexer:
         return q.strip()
 
     @staticmethod
-    def categories(name: str, t: str) -> list:
-        if t == "music" or re.search(r"\.(flac|mp3|m4a|ogg|opus|wav)$", name, re.I):
+    def kind(name: str) -> str:
+        """Classify a Fastshare file by its name: 'tv', 'audio', 'movie' (video/other)."""
+        if AUDIO_EXT.search(name):
+            return "audio"
+        if TV_RE.search(name) or DATE_RE.search(name):
+            return "tv"
+        return "movie"
+
+    @classmethod
+    def wanted(cls, t: str, name: str) -> bool:
+        """Only return what the asking app can use: Radarr must not see episodes, Sonarr must not see movies."""
+        k = cls.kind(name)
+        if t == "tvsearch":
+            return k == "tv"
+        if t == "movie":
+            return k == "movie"
+        if t == "music":
+            return k in ("audio", "movie") and not REAL_VIDEO.search(name)  # tracks or archives, not videos
+        return True
+
+    @classmethod
+    def categories(cls, name: str, t: str) -> list:
+        k = cls.kind(name)
+        if t == "music" or k == "audio":
             return [3000]
         hd = bool(HD_RE.search(name))
-        if t == "tvsearch" or (t == "search" and TV_RE.search(name)):
+        if k == "tv":
             return [5000, 5040 if hd else 5030]
         return [2000, 2040 if hd else 2030]
 
     @staticmethod
-    def _token(row: dict) -> str:
-        data = {"u": row["download_url"], "n": row.get("filename", ""), "s": int((row.get("data") or {}).get("value") or 0)}
+    def _token(row: dict, name: str = "") -> str:
+        data = {"u": row["download_url"], "n": name or row.get("filename", ""), "s": int((row.get("data") or {}).get("value") or 0)}
         return base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip("=")
 
     # ------------------------------------------------------------ handlers --
@@ -108,26 +166,49 @@ class Indexer:
 
     def _rss(self, p: dict, base_url: str) -> bytes:
         t = p.get("t", "search")
-        rows = self._results(self.build_term(p))
+        q = (p.get("q") or "").strip()
+        term = self.build_term(p)
+        raw = self._results(term)
+        season = int(p["season"]) if str(p.get("season", "")).isdigit() and int(p["season"]) < 1900 else None
+        ep = int(p["ep"]) if str(p.get("ep", "")).isdigit() else None
+        items, rewrites = [], 0
+        for r in raw:
+            name = r.get("filename", "")
+            if not r.get("download_url") or not self.wanted(t, name):
+                continue
+            title = VIDEO_EXT.sub("", name)
+            ext = name[len(title):]
+            if t == "tvsearch":
+                pe = parse_episode(title)
+                if pe and season is not None and pe[0] != season:
+                    continue  # wrong season
+                if pe and ep is not None and ep not in pe[1]:
+                    continue  # wrong episode
+                if self.cfg.tv_title_mode == "auto":
+                    new = rewrite_title(title, q)
+                    if new != title:
+                        rewrites += 1
+                        title = new
+            items.append((r, title, title + ext))
+        log.info("%s q=%r season=%s ep=%s -> %d raw, %d returned, %d titles rewritten",
+                 t, q, season, ep, len(raw), len(items), rewrites)
         limit = min(int(p.get("limit") or 100), 200)
         offset = int(p.get("offset") or 0)
-        rows = [r for r in rows if r.get("download_url")]
-        page = rows[offset:offset + limit]
+        page = items[offset:offset + limit]
         now = formatdate(usegmt=True)
         out = ['<?xml version="1.0" encoding="UTF-8"?>',
                '<rss version="2.0" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">',
                "<channel><title>Fastshare</title>",
-               f'<newznab:response offset="{offset}" total="{len(rows)}"/>']
-        for r in page:
-            name = r.get("filename", "")
-            title = VIDEO_EXT.sub("", name)
+               f'<newznab:response offset="{offset}" total="{len(items)}"/>']
+        for r, title, save_name in page:
             size = int((r.get("data") or {}).get("value") or 0)
-            link = f"{base_url}/newznab/nzb/{self._token(r)}.nzb?apikey={self.cfg.api_key}"
+            link = f"{base_url}/newznab/nzb/{self._token(r, save_name)}.nzb?apikey={self.cfg.api_key}"
+            guid = hashlib.sha1(r["download_url"].encode()).hexdigest()
             out.append(
-                f"<item><title>{escape(title)}</title><guid isPermaLink=\"false\">{escape(self._token(r)[:40])}</guid>"
+                f'<item><title>{escape(title)}</title><guid isPermaLink="false">{guid}</guid>'
                 f"<link>{escape(link)}</link><pubDate>{now}</pubDate><size>{size}</size>"
                 f'<enclosure url={quoteattr(link)} length="{size}" type="application/x-nzb"/>'
-                + "".join(f'<newznab:attr name="category" value="{c}"/>' for c in self.categories(name, t))
+                + "".join(f'<newznab:attr name="category" value="{c}"/>' for c in self.categories(save_name, t))
                 + f'<newznab:attr name="size" value="{size}"/></item>'
             )
         out.append("</channel></rss>")

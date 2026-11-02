@@ -40,6 +40,7 @@ class Config:
     fs_pass: str
     fs_api_base: str
     fs_adult: bool
+    tv_title_mode: str
     retries: int
     user_agent: str
     speed_limit_kbps: int
@@ -83,6 +84,7 @@ def load() -> Config:
         fs_pass=os.environ.get("FASTSHARE_PASS", ""),
         fs_api_base=_env("FASTSHARE_API_BASE", "https://fastshare.cz").rstrip("/"),
         fs_adult=_bool("FASTSHARE_ADULT", False),
+        tv_title_mode=_env("TV_TITLE_MODE", "auto").lower(),
         retries=_int("RETRIES", 4),
         user_agent=_env(
             "USER_AGENT",
