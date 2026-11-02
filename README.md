@@ -28,6 +28,19 @@ host `fastshare-arr`, port `8085`, no SSL, URL base empty, API key = ours, categ
 
 Mount the same data path in all containers (e.g. `/data`) so imports and hardlinks work without remote path mapping.
 
+## API key
+Generated once on first start and stored in `CONFIG_DIR/api_key` (default `/config/api_key`, mode 600); every later
+start reuses it. Show it with `docker exec fastshare-arr python -m fastshare_arr apikey`. Or pin your own with `API_KEY`.
+`/config` must be a bind mount or named volume - without one the key (and queue) are lost when the container is
+re-created, and a warning is logged if the key cannot be saved.
+
+## File and directory ownership
+Set `PUID` / `PGID` (same values as your Sonarr/Radarr containers) and `UMASK`. The container starts as root,
+creates and hands over `/config` and the download folders, then drops to that user, so downloaded files, unpacked
+files, the state file and the API key all belong to PUID:PGID. Existing files in the download folders are left
+alone unless you set `CHOWN_RECURSIVE=true` once. If you start the container with Docker's `user:` option instead,
+PUID/PGID are ignored (the container then cannot chown anything, so the mounted folders must already be writable).
+
 ## Domain
 The Kodi add-on talks to `https://fastshare.cz`, which is the default. If your account lives on fastshare.cloud and
 that host serves the same API, set `FASTSHARE_API_BASE=https://fastshare.cloud` and run `check`.
@@ -43,7 +56,7 @@ that host serves the same API, set `FASTSHARE_API_BASE=https://fastshare.cloud` 
 
 ## Settings (env)
 `FASTSHARE_USER`, `FASTSHARE_PASS`, `FASTSHARE_API_BASE`, `FASTSHARE_ADULT` (false), `API_KEY`, `PORT` (8085),
-`COMPLETE_DIR`, `INCOMPLETE_DIR`, `CATEGORIES`, `MAX_ACTIVE_JOBS` (1), `SPEED_LIMIT_KBPS`, `EXTRACT`,
+`PUID`, `PGID`, `UMASK`, `CHOWN_RECURSIVE`, `COMPLETE_DIR`, `INCOMPLETE_DIR`, `CATEGORIES`, `MAX_ACTIVE_JOBS` (1), `SPEED_LIMIT_KBPS`, `EXTRACT`,
 `DELETE_ARCHIVES`, `RETRIES` (4), `DEBUG`.
 
 Tests (fake Fastshare API, whole flow search -> grab -> download -> unpack): `python -m unittest discover tests`.

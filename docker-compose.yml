@@ -2,10 +2,13 @@ services:
   fastshare-arr:
     build: .
     container_name: fastshare-arr
-    user: "1000:1000"            # same uid/gid as your *arr containers
     restart: unless-stopped
     ports: ["8085:8085"]
     environment:
+      PUID: "1000"               # owner of everything we write: use the same uid/gid as your *arr containers
+      PGID: "1000"
+      UMASK: "002"               # 002 = group-writable (files 664, dirs 775); default 022
+      # CHOWN_RECURSIVE: "true"  # one-off: also re-own existing files in the download folders
       FASTSHARE_USER: "your-login"
       FASTSHARE_PASS: "your-password"
       # FASTSHARE_API_BASE: https://fastshare.cz   # Kodi add-on default; try https://fastshare.cloud if needed

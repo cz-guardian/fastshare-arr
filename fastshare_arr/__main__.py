@@ -3,7 +3,7 @@ import signal
 import sys
 import threading
 
-from . import __version__, config, extract
+from . import __version__, config, extract, privileges
 from .fastshare import FastshareClient, FastshareError
 from .manager import Manager
 from .sabapi import make_server
@@ -30,6 +30,10 @@ def main():
         level=logging.DEBUG if cfg.debug else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
+    if len(sys.argv) > 1 and sys.argv[1] == "apikey":
+        print(cfg.api_key)
+        return
+    privileges.setup(cfg)
     if len(sys.argv) > 1 and sys.argv[1] == "check":
         try:
             check(cfg, " ".join(a for a in sys.argv[2:] if a != "--probe"), "--probe" in sys.argv)

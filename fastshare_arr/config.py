@@ -1,6 +1,7 @@
 """Configuration, read from environment variables (Docker-friendly)."""
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 from dataclasses import dataclass
@@ -52,12 +53,19 @@ def load() -> Config:
     api_key = _env("API_KEY")
     if not api_key:
         key_file = config_dir / "api_key"
-        if key_file.exists():
+        if key_file.exists() and key_file.read_text().strip():
             api_key = key_file.read_text().strip()
         else:
             api_key = secrets.token_hex(16)
-            key_file.write_text(api_key)
-
+            try:  # generated once, then reused on every start
+                tmp = key_file.with_suffix(".tmp")
+                tmp.write_text(api_key)
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, key_file)
+            except OSError as e:
+                logging.getLogger("config").error(
+                    "API key could NOT be saved to %s (%s) - it will change on every restart! "
+                    "Mount a writable volume at CONFIG_DIR or set API_KEY.", key_file, e)
     cats = [c.strip() for c in _env("CATEGORIES", "tv,movies,music").split(",") if c.strip()]
 
     return Config(
